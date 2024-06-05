@@ -51,7 +51,7 @@ namespace FileSearch
             
             if (e.HotKey.Key == Key.Space && e.HotKey.Modifiers == ModifierKeys.Alt)
             {
-                if (_mainWindow.IsVisible)
+                if (_mainWindow.IsActive)
                 {
                     _mainWindow.Hide();
                 }

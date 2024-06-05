@@ -25,11 +25,9 @@ namespace FileSearch
             InitializeComponent();
             _mainWindowViewModel = new MainWindowViewModel(ApplySearchBoxFilter);
             DataContext = _mainWindowViewModel;
-        
+
             string userFolderPath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             ConfigPath = Path.Combine(userFolderPath, "Config.yaml");
-            AppConfig = LoadConfig();
-            StartWatching();
             _searchTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromMilliseconds(250)
@@ -40,7 +38,7 @@ namespace FileSearch
                 ApplySearchBoxFilter();
             };
 
-            // CTRL+F shortcut
+            // Focus search box
             RoutedCommand focusSearchBoxCommand = new();
             CommandBinding focusSearchBoxCommandBinding = new(
                 focusSearchBoxCommand,
@@ -54,7 +52,27 @@ namespace FileSearch
             };
             InputBindings.Add(focusSearchBoxKeyBinding);
             
-            // Hide window with ESC
+            // Reload config
+            RoutedCommand reloadConfigCommand = new();
+            CommandBinding reloadConfigCommandBinding = new(
+                reloadConfigCommand,
+                async (sender, e) => await Task.Run(ReloadConfigAndResults).ConfigureAwait(false));
+            CommandBindings.Add(reloadConfigCommandBinding);
+            KeyBinding reloadConfigKeyBinding = new()
+            {
+                Command = reloadConfigCommand,
+                Key = Key.F5
+            };
+            KeyBinding reloadConfigKeyBinding2 = new()
+            {
+                Command = reloadConfigCommand,
+                Modifiers = ModifierKeys.Control,
+                Key = Key.R
+            };
+            InputBindings.Add(reloadConfigKeyBinding);
+            InputBindings.Add(reloadConfigKeyBinding2);
+
+            // Hide window
             RoutedCommand hideWindowCommand = new();
             CommandBinding hideWindowCommandBinding = new(
                 hideWindowCommand,
@@ -66,27 +84,17 @@ namespace FileSearch
                 Key = Key.Escape
             };
             InputBindings.Add(hideWindowKeyBinding);
-            
-            Task.Run(() =>
-            {
-                try
-                {
-                    _mainWindowViewModel.IsLoading = true;
-                    InitializeAllResults();
-                    ApplySearchBoxFilter();
-                }
-                finally
-                {
-                    _mainWindowViewModel.IsLoading = false;
-                }
-            }).ConfigureAwait(false);
 
+            Task.Run(ReloadConfigAndResults).ConfigureAwait(false);
         }
 
-        private FileSystemWatcher _fileSystemWatcher;
+        private FileSystemWatcher _fileSystemConfigWatcher;
+        private readonly List<FileSystemWatcher> _fileSystemWatchersForFolders = new();
         private readonly DispatcherTimer _searchTimer;
         private List<Result> _allResults = new();
+        private readonly HashSet<string> _allResultsFilePaths = new();
         private readonly MainWindowViewModel _mainWindowViewModel;
+        private bool _reloadingConfig = false;
 
         public Config AppConfig { get; set; }
 
@@ -99,7 +107,6 @@ namespace FileSearch
 
         private void InitializeAllResults(CancellationToken ctsToken = default)
         {
-            HashSet<string> uniqueFilePaths = new HashSet<string>();
             foreach (string folder in AppConfig.Folders)
             {
                 Console.WriteLine($"Include folder: {folder}");
@@ -108,35 +115,55 @@ namespace FileSearch
                 {
                     if (ctsToken.IsCancellationRequested)
                     {
-                        throw new OperationCanceledException();
+                        Console.WriteLine($"InitializeAllResults cancelled at {folder}");
+                        break;
                     }
-                    
+
                     if (!AppConfig.IncludeHiddenFiles &&
                         (new DirectoryInfo(directory).Attributes & FileAttributes.Hidden) == FileAttributes.Hidden)
                     {
                         continue;
                     }
 
-                    uniqueFilePaths.Add(directory);
+                    lock (_allResultsFilePaths)
+                    {
+                        _allResultsFilePaths.Add(directory);
+                    }
+
                     foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
                     {
                         if (ctsToken.IsCancellationRequested)
                         {
-                            throw new OperationCanceledException();
+                            Console.WriteLine($"InitializeAllResults cancelled at {file}");
+                            break;
                         }
-                        
+
                         if (!AppConfig.IncludeHiddenFiles && (new FileInfo(file).Attributes & FileAttributes.Hidden) ==
                             FileAttributes.Hidden)
                         {
                             continue;
                         }
 
-                        uniqueFilePaths.Add(file);
+                        lock (_allResultsFilePaths)
+                        {
+                            _allResultsFilePaths.Add(file);
+                        }
                     }
                 }
             }
 
-            _allResults = uniqueFilePaths.Select(filePath => new Result(filePath)).ToList();
+            if (ctsToken.IsCancellationRequested)
+            {
+                // Cancelled. Do not update _allResults.
+                Console.WriteLine($"InitializeAllResults cancelled");
+                return;
+            }
+
+            lock (_allResultsFilePaths)
+            {
+                _allResults = _allResultsFilePaths.Select(filePath => new Result(filePath)).ToList();
+            }
+
             Console.WriteLine($"Loaded {_allResults.Count} files.");
         }
 
@@ -200,14 +227,25 @@ namespace FileSearch
             try
             {
                 IDeserializer deserializer = new DeserializerBuilder().Build();
-                using StreamReader reader = File.OpenText(ConfigPath);
-                Config config = deserializer.Deserialize<Config>(reader);
-                return config;
+
+                while (true)
+                {
+                    try
+                    {
+                        using StreamReader reader = File.OpenText(ConfigPath);
+                        Config config = deserializer.Deserialize<Config>(reader);
+                        return config;
+                    }
+                    catch (IOException)
+                    {
+                        Console.WriteLine("IO exception. Try again...");
+                    }
+                }
             }
-            catch (FileNotFoundException e)
+            catch (FileNotFoundException)
             {
                 Console.WriteLine("FileNotFound.");
-                Config config = new Config();
+                Config config = new();
                 SaveConfig(config);
                 return config;
             }
@@ -221,44 +259,123 @@ namespace FileSearch
             File.WriteAllText(ConfigPath, yaml);
         }
 
-        private CancellationTokenSource cts = new CancellationTokenSource();
-        
-        public void StartWatching()
+        private CancellationTokenSource? cts = new();
+        private readonly object _allResultsLock = new();
+
+        public void InitializeFileWatchersForFolders(CancellationToken ctsToken = default)
         {
-            Console.WriteLine("StartWatching");
-            _fileSystemWatcher = new FileSystemWatcher
+            void CleanupFileWatchers()
             {
-                Path = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                Filter = "Config.yaml",
-                NotifyFilter = NotifyFilters.LastWrite
-            };
-            
-            _fileSystemWatcher.Changed += async (sender, args) =>
-            {
-                cts.Cancel();
-                cts = new CancellationTokenSource();
-
-                _mainWindowViewModel.IsLoading = true;
-
-                try
+                // Clean up old file system watchers.
+                foreach (FileSystemWatcher fileSystemWatcher in _fileSystemWatchersForFolders)
                 {
-                    await Task.Delay(100);
-                    Console.WriteLine("Config Changed! Reloading...");
-                    AppConfig = LoadConfig();
-                    InitializeAllResults(cts.Token);
+                    fileSystemWatcher.Dispose();
+                }
+
+                _fileSystemWatchersForFolders.Clear();
+            }
+
+            CleanupFileWatchers();
+            Console.WriteLine($"Initialize filesystem watchers for {AppConfig.Folders.Count}");
+
+
+            foreach (string folder in AppConfig.Folders)
+            {
+                FileSystemWatcher fileSystemWatcherForFolder = new()
+                {
+                    Path = folder,
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName,
+                    IncludeSubdirectories = true,
+                    EnableRaisingEvents = true,
+                };
+
+                fileSystemWatcherForFolder.Created += (sender, args) =>
+                {
+                    if (cts.IsCancellationRequested)
+                    {
+                        // Ignore event, the system watcher is now longer needed.
+                        return;
+                    }
+
+                    Console.WriteLine($"Created: {args.FullPath}");
+                    lock (_allResultsLock)
+                    {
+                        if (_allResultsFilePaths.Add(args.FullPath))
+                        {
+                            _allResults.Add(new Result(args.FullPath));
+                        }
+                    }
+
+                    // _lastUpdate = DateTime.Now;
                     ApplySearchBoxFilter();
-                }
-                catch (OperationCanceledException)
-                {
-                    Console.WriteLine("Cancelled");
-                }
-                finally
-                {
-                    _mainWindowViewModel.IsLoading = false;
-                }
-            };
+                };
 
-            _fileSystemWatcher.EnableRaisingEvents = true;
+                fileSystemWatcherForFolder.Deleted += (sender, args) =>
+                {
+                    if (cts.IsCancellationRequested)
+                    {
+                        // Ignore event, the system watcher is now longer needed.
+                        return;
+                    }
+
+                    Console.WriteLine($"Deleted: {args.FullPath}");
+                    lock (_allResultsLock)
+                    {
+                        if (_allResultsFilePaths.Contains(args.FullPath))
+                        {
+                            if (_allResultsFilePaths.Remove(args.FullPath))
+                            {
+                                _allResults.Remove(_allResults.First(r => r.FullFilePath == args.FullPath));
+                            }
+                        }
+                    }
+
+                    // _lastUpdate = DateTime.Now;
+                    ApplySearchBoxFilter();
+                };
+
+                fileSystemWatcherForFolder.Renamed += (sender, args) =>
+                {
+                    if (cts.IsCancellationRequested)
+                    {
+                        // Ignore event, the system watcher is now longer needed.
+                        return;
+                    }
+
+                    Console.WriteLine($"Renamed: {args.OldFullPath} -> {args.FullPath}");
+                    lock (_allResultsLock)
+                    {
+                        // Remove old filename
+                        if (_allResultsFilePaths.Remove(args.OldFullPath))
+                        {
+                            _allResults.Remove(_allResults.First(r => r.FullFilePath == args.OldFullPath));
+                        }
+
+                        // Add new filename
+                        if (_allResultsFilePaths.Add(args.FullPath))
+                        {
+                            _allResults.Add(new Result(args.FullPath));
+                        }
+                    }
+
+                    // _lastUpdate = DateTime.Now;
+                    ApplySearchBoxFilter();
+                };
+
+                _fileSystemWatchersForFolders.Add(fileSystemWatcherForFolder);
+                Console.WriteLine($"Created FileSystemWatcher for directory: {folder}");
+
+                if (cts.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+
+            if (cts.IsCancellationRequested)
+            {
+                Console.WriteLine("InitializeFileWatchersForFolders cancelled. Cleanup file watchers");
+                CleanupFileWatchers();
+            }
         }
 
         private void ExitApp(object sender, RoutedEventArgs e)
@@ -277,8 +394,23 @@ namespace FileSearch
             _searchTimer.Start();
         }
 
+        private readonly object _applySearchBoxFilterLock = new();
+
         private void ApplySearchBoxFilter()
         {
+            // bool doUpdate = false;
+            // lock (_applySearchBoxFilterLock)
+            // {
+            //     doUpdate = _lastUpdate > _lastSearch;
+            //     _lastSearch = DateTime.Now;
+            // }
+            //
+            // if (!doUpdate)
+            // {
+            //     Console.WriteLine("");
+            //     return;
+            // }
+
             try
             {
                 Helper.RunOnDispatcher(() =>
@@ -286,6 +418,7 @@ namespace FileSearch
                     Mouse.OverrideCursor = Cursors.Wait;
                     string currentText = SearchBox.Text.Trim();
                     UpdateResults(string.IsNullOrWhiteSpace(currentText) ? _allResults : FilterResults(currentText));
+                    // _lastUpdate = DateTime.Now;    
                 });
             }
             finally
@@ -293,8 +426,8 @@ namespace FileSearch
                 Helper.RunOnDispatcher(() => Mouse.OverrideCursor = null);
             }
         }
-        
-        private static T FindParent<T>(DependencyObject child) where T: DependencyObject
+
+        private static T FindParent<T>(DependencyObject child) where T : DependencyObject
         {
             while (true)
             {
@@ -307,7 +440,7 @@ namespace FileSearch
                 child = parentObject;
             }
         }
-        
+
         private void ResultsDataGrid_OnMouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
             DataGrid dataGrid = sender as DataGrid;
@@ -405,6 +538,35 @@ namespace FileSearch
             {
                 ResultsDataGrid.Focus();
             }
+        }
+
+
+        private void ReloadConfigAndResults()
+        {
+            if (_mainWindowViewModel.IsLoading)
+            {
+                // TODO: Would be nice if loading the config could be cancelled...
+                MessageBox.Show("Please wait until the config has been reloaded, then try again.", "Error");
+                return;
+            }
+
+            try
+            {
+                _mainWindowViewModel.IsLoading = true;
+                AppConfig = LoadConfig();
+                InitializeAllResults();
+                InitializeFileWatchersForFolders();
+                ApplySearchBoxFilter();
+            }
+            finally
+            {
+                _mainWindowViewModel.IsLoading = false;
+            }
+        }
+
+        private async void ReloadConfigClicked(object sender, RoutedEventArgs e)
+        {
+            await Task.Run(ReloadConfigAndResults).ConfigureAwait(false);
         }
     }
 }

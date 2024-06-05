@@ -32,6 +32,7 @@
         <Menu Grid.Row="0">
             <MenuItem Header="_File">
                 <MenuItem Header="Edit _Configuration" Click="EditConfig" />
+                <MenuItem Header="_Reload Configuration" Click="ReloadConfigClicked" />
                 <MenuItem Header="_Exit" Click="ExitApp" />
             </MenuItem>
             <MenuItem Header="_Search">
