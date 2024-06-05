@@ -51,7 +51,7 @@ namespace FileSearch
                 Key = Key.F
             };
             InputBindings.Add(focusSearchBoxKeyBinding);
-            
+
             // Reload config
             RoutedCommand reloadConfigCommand = new();
             CommandBinding reloadConfigCommandBinding = new(
@@ -567,6 +567,17 @@ namespace FileSearch
         private async void ReloadConfigClicked(object sender, RoutedEventArgs e)
         {
             await Task.Run(ReloadConfigAndResults).ConfigureAwait(false);
+        }
+
+        private void ResultsDataGrid_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (ResultsDataGrid.SelectedItem is Result result)
+            {
+                // Initialize the drag & drop operation
+                string[] files = { result.FullFilePath };
+                DataObject dragData = new(DataFormats.FileDrop, files);
+                DragDrop.DoDragDrop((DependencyObject)e.OriginalSource, dragData, DragDropEffects.Move);
+            }
         }
     }
 }

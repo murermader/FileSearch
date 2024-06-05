@@ -53,6 +53,7 @@
             Margin="10 20 10 5" />
 
         <DataGrid BorderBrush="#e0e0e0"
+                  MouseLeftButtonDown="ResultsDataGrid_OnMouseLeftButtonDown"
                   IsEnabled="{Binding IsLoading, Mode=OneWay, UpdateSourceTrigger=PropertyChanged, Converter={StaticResource InvertBoolean}}"
                   SelectionUnit="FullRow" SelectionMode="Single" IsReadOnly="True" CanUserAddRows="False"
                   CanUserDeleteRows="False"
