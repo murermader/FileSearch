@@ -13,13 +13,13 @@ public class MainWindowViewModel : INotifyPropertyChanged
     {
         // For Designer
     }
-    
+
     public MainWindowViewModel(Action onConfiugrationChanged)
     {
         _onConfiugrationChanged = onConfiugrationChanged;
     }
 
-    private readonly Action _onConfiugrationChanged;   
+    private readonly Action _onConfiugrationChanged;
     private bool _onlySearchFileNames;
     private ObservableCollection<Result> _results = new();
     private bool _matchCase;
@@ -33,7 +33,7 @@ public class MainWindowViewModel : INotifyPropertyChanged
         {
             if (value == _isLoading) return;
             Console.WriteLine($"IsLoading={value}");
-            Mouse.OverrideCursor = value ? Cursors.Wait : null;
+            Helper.RunOnDispatcher(() => Mouse.OverrideCursor = value ? Cursors.Wait : null);
             _isLoading = value;
             OnPropertyChanged();
         }
@@ -103,5 +103,4 @@ public class MainWindowViewModel : INotifyPropertyChanged
     }
 
     #endregion
-    
 }

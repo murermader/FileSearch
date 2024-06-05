@@ -32,6 +32,18 @@ public static class Helper
         return chosenValue;
     }
 
+    public static void RunOnDispatcher(Action action)
+    {
+        if (!System.Windows.Application.Current.Dispatcher.CheckAccess())
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(action);
+        }
+        else
+        {
+            action.Invoke();    
+        }
+    }
+    
     public static void OpenPath(string filePath)
     {
         using Process fileopener = new Process();

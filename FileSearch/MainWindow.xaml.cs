@@ -142,20 +142,17 @@ namespace FileSearch
 
         private void UpdateResults(List<Result> results)
         {
-            if (!Application.Current.Dispatcher.CheckAccess())
+            Helper.RunOnDispatcher(() =>
             {
-                Application.Current.Dispatcher.Invoke(() => UpdateResults(results));
-                return;
-            }
-            
-            _mainWindowViewModel.Results.Clear();
-            foreach (Result result in results)
-            {
-                _mainWindowViewModel.Results.Add(result);
-            }
+                _mainWindowViewModel.Results.Clear();
+                foreach (Result result in results)
+                {
+                    _mainWindowViewModel.Results.Add(result);
+                }
+            });
         }
 
-        private List<Result> FilterResults(string searchText)
+        private List<Result> FilterResults(string? searchText)
         {
             List<Result> filteredResults = new List<Result>();
             string[] searchTerms = searchText.Split();
@@ -284,13 +281,16 @@ namespace FileSearch
         {
             try
             {
-                Mouse.OverrideCursor = Cursors.Wait;
-                string currentText = SearchBox.Text.Trim();
-                UpdateResults(string.IsNullOrWhiteSpace(currentText) ? _allResults : FilterResults(currentText));
+                Helper.RunOnDispatcher(() =>
+                {
+                    Mouse.OverrideCursor = Cursors.Wait;
+                    string currentText = SearchBox.Text.Trim();
+                    UpdateResults(string.IsNullOrWhiteSpace(currentText) ? _allResults : FilterResults(currentText));
+                });
             }
             finally
             {
-                Mouse.OverrideCursor = null;
+                Helper.RunOnDispatcher(() => Mouse.OverrideCursor = null);
             }
         }
         
