@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -9,9 +10,11 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Microsoft.VisualBasic.FileIO;
 using Peter;
 using YamlDotNet.Serialization;
 using Path = System.IO.Path;
+using SearchOption = System.IO.SearchOption;
 
 namespace FileSearch
 {
@@ -23,7 +26,11 @@ namespace FileSearch
         public MainWindow()
         {
             InitializeComponent();
-            _mainWindowViewModel = new MainWindowViewModel(ApplySearchBoxFilter);
+            _mainWindowViewModel = new MainWindowViewModel(ApplySearchBoxFilter, (files) =>
+            {
+                DataObject dragData = new(DataFormats.FileDrop, files);
+                DragDrop.DoDragDrop(ResultsDataGrid, dragData, DragDropEffects.Move);
+            });
             DataContext = _mainWindowViewModel;
 
             string userFolderPath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -39,53 +46,47 @@ namespace FileSearch
             };
 
             // Focus search box
-            RoutedCommand focusSearchBoxCommand = new();
-            CommandBinding focusSearchBoxCommandBinding = new(
-                focusSearchBoxCommand,
-                (sender, e) => SearchBox.Focus());
-            CommandBindings.Add(focusSearchBoxCommandBinding);
-            KeyBinding focusSearchBoxKeyBinding = new()
-            {
-                Command = focusSearchBoxCommand,
-                Modifiers = ModifierKeys.Control,
-                Key = Key.F
-            };
-            InputBindings.Add(focusSearchBoxKeyBinding);
+            SetupShortcut(() => SearchBox.Focus(), Key.F, ModifierKeys.Control);
 
             // Reload config
-            RoutedCommand reloadConfigCommand = new();
-            CommandBinding reloadConfigCommandBinding = new(
-                reloadConfigCommand,
-                async (sender, e) => await Task.Run(ReloadConfigAndResults).ConfigureAwait(false));
-            CommandBindings.Add(reloadConfigCommandBinding);
-            KeyBinding reloadConfigKeyBinding = new()
-            {
-                Command = reloadConfigCommand,
-                Key = Key.F5
-            };
-            KeyBinding reloadConfigKeyBinding2 = new()
-            {
-                Command = reloadConfigCommand,
-                Modifiers = ModifierKeys.Control,
-                Key = Key.R
-            };
-            InputBindings.Add(reloadConfigKeyBinding);
-            InputBindings.Add(reloadConfigKeyBinding2);
+            SetupShortcut(() => Task.Run(ReloadConfigAndResults).ConfigureAwait(false), Key.F5);
+            SetupShortcut(() => Task.Run(ReloadConfigAndResults).ConfigureAwait(false), Key.R, ModifierKeys.Control);
 
+            // Copy selected item (configured in XAML for Datagrid)
+
+            // Delete selected item
+
+            // TODO
             // Hide window
-            RoutedCommand hideWindowCommand = new();
-            CommandBinding hideWindowCommandBinding = new(
-                hideWindowCommand,
-                (sender, e) => Hide());
-            CommandBindings.Add(hideWindowCommandBinding);
-            KeyBinding hideWindowKeyBinding = new()
-            {
-                Command = hideWindowCommand,
-                Key = Key.Escape
-            };
-            InputBindings.Add(hideWindowKeyBinding);
-
+            SetupShortcut(Hide, Key.Escape);
             Task.Run(ReloadConfigAndResults).ConfigureAwait(false);
+        }
+
+        private void SetupShortcut(Action action, Key key, ModifierKeys modifiers = default)
+        {
+            RoutedCommand routedCommand = new();
+            CommandBinding commandBinding = new(
+                routedCommand,
+                (sender, e) => action());
+            CommandBindings.Add(commandBinding);
+
+            // Remove the system command for the provided keys and modifiers
+            KeyBinding? existingBinding = InputBindings
+                .OfType<KeyBinding>()
+                .FirstOrDefault(kb => kb.Key == key && kb.Modifiers == modifiers);
+            if (existingBinding != null)
+            {
+                Console.WriteLine($"Remove existing key binding for {modifiers}+{key}");
+                InputBindings.Remove(existingBinding);
+            }
+
+            KeyBinding keyBinding = new()
+            {
+                Command = routedCommand,
+                Key = key,
+                Modifiers = modifiers
+            };
+            InputBindings.Add(keyBinding);
         }
 
         private FileSystemWatcher _fileSystemConfigWatcher;
@@ -179,7 +180,7 @@ namespace FileSearch
             });
         }
 
-        private List<Result> FilterResults(string? searchText)
+        private List<Result> FilterResults(string searchText)
         {
             List<Result> filteredResults = new List<Result>();
             string[] searchTerms = searchText.Split();
@@ -204,8 +205,7 @@ namespace FileSearch
                     }
                     else
                     {
-                        if (!result.FilePath.Contains(searchTerm, stringComparison) &&
-                            !result.FileName.Contains(searchTerm, stringComparison))
+                        if (!result.FullFilePath.Contains(searchTerm, stringComparison))
                         {
                             includeInResults = false;
                             break;
@@ -576,7 +576,42 @@ namespace FileSearch
                 // Initialize the drag & drop operation
                 string[] files = { result.FullFilePath };
                 DataObject dragData = new(DataFormats.FileDrop, files);
-                DragDrop.DoDragDrop((DependencyObject)e.OriginalSource, dragData, DragDropEffects.Move);
+                System.Windows.DragDrop.DoDragDrop((DependencyObject)e.OriginalSource, dragData, DragDropEffects.Move);
+            }
+        }
+
+        private void CopySelectedItem(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (ResultsDataGrid.SelectedItem is Result result)
+            {
+                StringCollection paths = new() { result.FullFilePath };
+                Console.WriteLine($"SetFileDropList to {result.FullFilePath}");
+                Clipboard.SetFileDropList(paths);
+            }
+        }
+
+        private void DeleteSelectedResults(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (ResultsDataGrid.SelectedItems.Count <= 0)
+            {
+                return;
+            }
+
+            foreach (Result result in ResultsDataGrid.SelectedItems)
+            {
+                if (File.Exists(result.FullFilePath))
+                {
+                    FileSystem.DeleteFile(result.FullFilePath,
+                        UIOption.OnlyErrorDialogs,
+                        RecycleOption.SendToRecycleBin);
+                }
+
+                if (Directory.Exists(result.FullFilePath))
+                {
+                    FileSystem.DeleteDirectory(result.FullFilePath,
+                        UIOption.OnlyErrorDialogs,
+                        RecycleOption.SendToRecycleBin);
+                }
             }
         }
     }

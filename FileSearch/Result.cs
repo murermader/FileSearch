@@ -24,6 +24,8 @@ public class Result
         }
     }
 
+    private string? _fullFilePath; 
+
     public string FileName { get; set; }
     
     public string FileType { get; set; }
@@ -32,7 +34,18 @@ public class Result
     
     public double FileSize { get; set; }
 
-    public string FullFilePath => Path.Combine(FilePath, FileName);
+    public string FullFilePath
+    {
+        get
+        {
+            if (_fullFilePath is not null)
+            {
+                return _fullFilePath;
+            }
+            _fullFilePath = Path.Combine(FilePath, FileName);
+            return _fullFilePath;
+        }
+    }
 
     // public int RunCount { get; set; }
 }

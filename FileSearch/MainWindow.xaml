@@ -8,6 +8,7 @@
         d:DesignHeight="300"
         d:DesignWidth="600"
         WindowStartupLocation="CenterScreen"
+        xmlns:dd="urn:gong-wpf-dragdrop"
         Title="Everything 2" Height="800" Width="1400"
         Background="#FDFDFD"
         Activated="MainWindow_OnActivated"
@@ -53,9 +54,10 @@
             Margin="10 20 10 5" />
 
         <DataGrid BorderBrush="#e0e0e0"
-                  MouseLeftButtonDown="ResultsDataGrid_OnMouseLeftButtonDown"
+                  dd:DragDrop.IsDragSource="True"
+                  dd:DragDrop.DropHandler="{Binding}"
                   IsEnabled="{Binding IsLoading, Mode=OneWay, UpdateSourceTrigger=PropertyChanged, Converter={StaticResource InvertBoolean}}"
-                  SelectionUnit="FullRow" SelectionMode="Single" IsReadOnly="True" CanUserAddRows="False"
+                  SelectionUnit="FullRow" SelectionMode="Extended" IsReadOnly="True" CanUserAddRows="False"
                   CanUserDeleteRows="False"
                   CanUserReorderColumns="False"
                   CanUserResizeRows="False" AutoGenerateColumns="False" ItemsSource="{Binding Results}"
@@ -67,6 +69,10 @@
                   MouseRightButtonUp="ResultsDataGrid_OnMouseRightButtonUp"
                   SelectedItem="{Binding SelectedResult, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                   Margin="10 15 10 5">
+            <DataGrid.CommandBindings>
+                <CommandBinding Command="Copy" Executed="CopySelectedItem" />
+                <CommandBinding Command="Delete" Executed="DeleteSelectedResults" />
+            </DataGrid.CommandBindings>
             <DataGrid.Columns>
                 <DataGridTemplateColumn Width="Auto">
                     <DataGridTemplateColumn.CellTemplate>
