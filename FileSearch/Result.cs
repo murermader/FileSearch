@@ -12,15 +12,24 @@ public class Result
     
     public Result(string filePath)
     {
-        FileInfo fileInfo = new FileInfo(filePath);
+        FileInfo fileInfo = new(filePath);
         FilePath = fileInfo.DirectoryName;
         FileName = fileInfo.Name;
-        
-        // Do not calcualte sizes for directories
-        if (File.Exists(filePath))
+
+        try
         {
-            FileSize = Math.Round(new FileInfo(filePath).Length / 1024.0, 3);
-            FileType = fileInfo.Extension.TrimStart('.').ToUpperInvariant();
+            // Do not calcualte sizes for directories
+            if (File.Exists(filePath))
+            {
+                FileSize = Math.Round(new FileInfo(filePath).Length / 1024.0, 3);
+                FileType = fileInfo.Extension.TrimStart('.').ToUpperInvariant();            
+            }
+        }
+        catch (FileNotFoundException)
+        {
+            // File was deleted while we were adding it. It probably happened very fast.
+            // We can ignore the exception, because the file will be removed as soon as the delete event
+            // by the file watcher triggers.
         }
     }
 
