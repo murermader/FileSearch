@@ -106,57 +106,17 @@ namespace FileSearch
             Console.WriteLine("test");
         }
 
-        private void InitializeAllResults(CancellationToken ctsToken = default)
+        private void InitializeAllResults(CancellationToken ctsToken = default, Ignore.Ignore ignore = null)
         {
             foreach (string folder in AppConfig.Folders)
             {
                 Console.WriteLine($"Include folder: {folder}");
-
-                foreach (string directory in Directory.EnumerateDirectories(folder, "*", SearchOption.AllDirectories))
-                {
-                    if (ctsToken.IsCancellationRequested)
-                    {
-                        Console.WriteLine($"InitializeAllResults cancelled at {folder}");
-                        break;
-                    }
-
-                    if (!AppConfig.IncludeHiddenFiles &&
-                        (new DirectoryInfo(directory).Attributes & FileAttributes.Hidden) == FileAttributes.Hidden)
-                    {
-                        continue;
-                    }
-
-                    lock (_allResultsFilePaths)
-                    {
-                        _allResultsFilePaths.Add(directory);
-                    }
-
-                    foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
-                    {
-                        if (ctsToken.IsCancellationRequested)
-                        {
-                            Console.WriteLine($"InitializeAllResults cancelled at {file}");
-                            break;
-                        }
-
-                        if (!AppConfig.IncludeHiddenFiles && (new FileInfo(file).Attributes & FileAttributes.Hidden) ==
-                            FileAttributes.Hidden)
-                        {
-                            continue;
-                        }
-
-                        lock (_allResultsFilePaths)
-                        {
-                            _allResultsFilePaths.Add(file);
-                        }
-                    }
-                }
+                GetPathsFromDirectory(folder, ignore, new List<string>(), ctsToken);
             }
 
             if (ctsToken.IsCancellationRequested)
             {
                 // Cancelled. Do not update _allResults.
-                Console.WriteLine($"InitializeAllResults cancelled");
                 return;
             }
 
@@ -166,6 +126,124 @@ namespace FileSearch
             }
 
             Console.WriteLine($"Loaded {_allResults.Count} files.");
+        }
+
+        private void GetPathsFromDirectory(string rootPath, Ignore.Ignore? ignore, List<string> prependFolders,
+            CancellationToken ctsToken = default)
+        {
+            string gitIgnorePath = Path.Combine(rootPath, ".gitignore");
+            if (File.Exists(gitIgnorePath))
+            {
+                ignore = LoadIgnore(gitIgnorePath);
+            }
+
+            // Get all files from directory
+            foreach (string file in Directory.EnumerateFiles(rootPath, "*", SearchOption.TopDirectoryOnly))
+            {
+                string ignorePath = "";
+                foreach (string folder in prependFolders)
+                {
+                    ignorePath += $"{folder}/";
+                }
+                ignorePath += Path.GetDirectoryName(file);                
+                if (ignore is not null && ignore.IsIgnored(ignorePath))
+                {
+                    // File is ignored by gitignore.
+                    Console.WriteLine($"Ignored: {file}");
+                    continue;
+                }
+
+                if (ctsToken.IsCancellationRequested)
+                {
+                    Console.WriteLine($"InitializeAllResults cancelled at {file}");
+                    break;
+                }
+
+                if (!AppConfig.IncludeHiddenFiles && (new FileInfo(file).Attributes & FileAttributes.Hidden) ==
+                    FileAttributes.Hidden)
+                {
+                    continue;
+                }
+
+                lock (_allResultsFilePaths)
+                {
+                    _allResultsFilePaths.Add(file);
+                }
+            }
+
+            // Recurse down the directories
+            foreach (string directory in Directory.EnumerateDirectories(rootPath, "*", SearchOption.TopDirectoryOnly))
+            {
+                string ignorePath = "";
+                foreach (string folder in prependFolders)
+                {
+                    ignorePath += $"{folder}/";
+                }
+                ignorePath += Path.GetFileName(directory);
+                
+                if (ignore is not null && ignore.IsIgnored(ignorePath))
+                {
+                    // File is ignored by gitignore.
+                    Console.WriteLine($"Ignored: {directory}");
+                    continue;
+                }
+
+                if (ctsToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                if (!AppConfig.IncludeHiddenFiles &&
+                    (new DirectoryInfo(directory).Attributes & FileAttributes.Hidden) == FileAttributes.Hidden)
+                {
+                    continue;
+                }
+
+                lock (_allResultsFilePaths)
+                {
+                    _allResultsFilePaths.Add(directory);
+                }
+
+                if (ignore is not null)
+                {
+                    prependFolders.Add(Path.GetFileName(rootPath));
+                }
+                GetPathsFromDirectory(directory, ignore, prependFolders, ctsToken);
+                if (ignore is not null)
+                {
+                    prependFolders.Remove(Path.GetFileName(rootPath));
+                }
+            }
+        }
+
+        private Ignore.Ignore LoadIgnore(string path)
+        {
+            string[] lines = File.ReadAllLines(path);
+            List<string> rules = new List<string>();
+
+            foreach (string line in lines)
+            {
+                string lineTrimmed = line.Trim().TrimStart('/');
+
+                if (lineTrimmed.Length == 0)
+                {
+                    continue;
+                }
+
+                if (lineTrimmed.StartsWith("#"))
+                {
+                    continue;
+                }
+
+                if (!rules.Contains(lineTrimmed))
+                {
+                    rules.Add(lineTrimmed);
+                }
+            }
+
+            Ignore.Ignore ignore = new();
+            ignore.Add(rules);
+            return ignore;
         }
 
         private void UpdateResults(List<Result> results)
@@ -323,9 +401,15 @@ namespace FileSearch
                     {
                         if (_allResultsFilePaths.Contains(args.FullPath))
                         {
+                            bool isDirectory = Directory.Exists(args.FullPath);
+
                             if (_allResultsFilePaths.Remove(args.FullPath))
                             {
                                 _allResults.Remove(_allResults.First(r => r.FullFilePath == args.FullPath));
+                                if (isDirectory)
+                                {
+                                    _allResults.RemoveAll(r => r.FullFilePath.StartsWith(args.FullPath));
+                                }
                             }
                         }
                     }
